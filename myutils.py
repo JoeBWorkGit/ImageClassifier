@@ -32,61 +32,46 @@ def load_data(data_dir):
                              transforms.Normalize([0.485, 0.456, 0.406],
                                                  [0.229, 0.224, 0.225])])
 
-    image_datasets = dict()
-    image_datasets['train'] = datasets.ImageFolder(train_dir, transform=train)
-    image_datasets['valid'] = datasets.ImageFolder(valid_dir, transform=valid)
-    image_datasets['test'] = datasets.ImageFolder(test_dir, transform=test)
-
-
-
-    dataloaders = dict()
-    dataloaders['train'] = torch.utils.data.DataLoader(image_datasets['train'], batch_size=8, shuffle=True)
-    dataloaders['valid'] = torch.utils.data.DataLoader(image_datasets['valid'], batch_size=8)
-    dataloaders['test']  = torch.utils.data.DataLoader(image_datasets['test'], batch_size=64)
+        
+    train_data = datasets.ImageFolder(train_dir, transform=train)
+    validation_data = datasets.ImageFolder(valid_dir, transform=valid)
+    test_data = datasets.ImageFolder(test_dir ,transform = test)
+   
+    trainloader = torch.utils.data.DataLoader(train_data, batch_size=64, shuffle=True)
+    validloader = torch.utils.data.DataLoader(validation_data, batch_size =32,shuffle = True)
+    testloader = torch.utils.data.DataLoader(test_data, batch_size = 20, shuffle = True)
     
-    dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'valid', 'test']}
 
     print('Data Loaded')
-   # return dataloaders['train'], dataloaders['test'], dataloaders['valid'] 
-    return dataloaders, dataset_sizes, image_datasets['train']
-
+    return trainloader, validloader, testloader, train_data
+  
 def build_the_model(arch, hidden_units,learning_rate,gpu):
 
-    # Load in a pre-trained model, DenseNet default
-    if arch.lower() == "vgg19":
-        model = models.vgg19(pretrained=True)
-        print('model vgg19 will be built')
+    if arch.lower() == "vgg16":
+        model = models.vgg16(pretrained=True)
+        print('model vgg16 will be built')
     else:
-        model = models.densenet121(pretrained=True)
+        model = models.vgg19(pretrained=True)
+        print('model vgg19 (default) will be built')
 
     # Define a new, untrained feed-forward network as a classifier, using ReLU activations and dropout
     for param in model.parameters():
-        param.requires_grad = False # Freeze parameters so we don't backprop through them
+        param.requires_grad = False
 
-    if arch.lower() == "vgg19":
-        classifier = nn.Sequential(OrderedDict([
-                            ('dropout1', nn.Dropout(0.1)),
-                            ('fc1', nn.Linear(25088, hidden_units)), # 25088 must match
-                            ('relu1', nn.ReLU()),
-                            ('dropout2', nn.Dropout(0.1)),
-                            ('fc2', nn.Linear(hidden_units, 102)),
-                            ('output', nn.LogSoftmax(dim=1))
-                            ]))
-    else:
-        classifier = nn.Sequential(OrderedDict([
-                            ('dropout1', nn.Dropout(0.1)),
-                            ('fc1', nn.Linear(1024, hidden_units)), # 1024 must match
-                            ('relu1', nn.ReLU()),
-                            ('dropout2', nn.Dropout(0.1)),
-                            ('fc2', nn.Linear(hidden_units, 102)),
-                            ('output', nn.LogSoftmax(dim=1))
-                            ]))
-
+    from collections import OrderedDict
+    classifier = nn.Sequential(OrderedDict([
+                              ('fc1', nn.Linear(25088, hidden_units)),
+                              ('relu', nn.ReLU()),
+                              ('dropout1', nn.Dropout(0.5)),
+                              ('fc2', nn.Linear(hidden_units, 102)),
+                              ('output', nn.LogSoftmax(dim=1))
+                              ]))
+        
     model.classifier = classifier
     criterion = nn.NLLLoss()
     optimizer = optim.Adam(model.classifier.parameters(), lr=learning_rate)
     
-    print(f"Model bas been built from {arch} and {hidden_units} hidden units.")
+    print(f"Model bas been built using {arch} with {hidden_units} hidden units.")
 
     return model, criterion, optimizer
 
@@ -95,7 +80,9 @@ def train_model(model, epochs,trainloader, validloader, criterion, optimizer,gpu
     model.to(device)
     steps = 0
     print_every = 20
+    since = time.time()
     
+    print('Start training model')
     for e in range(epochs):
       
         running_loss = 0
@@ -104,7 +91,7 @@ def train_model(model, epochs,trainloader, validloader, criterion, optimizer,gpu
             steps += 1
             
             inputs, labels = inputs.to('cuda'), labels.to('cuda')
-            # zeroing parameter gradients
+           
             optimizer.zero_grad()
 
             # Forward and backward passes
@@ -116,20 +103,28 @@ def train_model(model, epochs,trainloader, validloader, criterion, optimizer,gpu
             running_loss += loss.item()
             # Carrying out validation step
             if steps % print_every == 0:
-                # setting model to evaluation mode during validation
+               
                 model.eval()
-                # Gradients are turned off as no longer in training
+               
                 with torch.no_grad():
                     valid_loss, accuracy = validation(model, validloader, criterion,device)
-                print(f"No. epochs: {e+1}, \
-                Training Loss: {round(running_loss/print_every,3)} \
-                Valid Loss: {round(valid_loss/len(validloader),3)} \
+             
+                print(f"Epoch {e+1}/{epochs}\
+                Training Loss: {round(running_loss/print_every,3)}\
+                Valid Loss: {round(valid_loss/len(validloader),3)}\
                 Valid Accuracy: {round(float(accuracy/len(validloader)),3)}")
+                
+                time_elapsed = time.time() - since
+                print('Elapsed training time {:.0f}m {:.0f}s'.format(
+                time_elapsed // 60, time_elapsed % 60))
 
                 running_loss = 0
                 # Turning training back on
                 model.train()
-    
+                
+    time_elapsed = time.time() - since
+    print('Total training time {:.0f}m {:.0f}s'.format(
+    time_elapsed // 60, time_elapsed % 60))
     return model, optimizer
 
 def validation(model, dataloader, criterion, device):
@@ -143,84 +138,18 @@ def validation(model, dataloader, criterion, device):
             output = model.forward(images)
             loss += criterion(output, labels).item()
 
-            ps = torch.exp(output) # get the class probabilities from log-softmax
+            ps = torch.exp(output)
             equality = (labels.data == ps.max(dim=1)[1])
             accuracy += equality.type(torch.FloatTensor).mean()
     
     return loss, accuracy
 
 
-
-
-def train_first_model(model, dataloaders, dataset_sizes, criterion, optimizer, num_epochs,gpu):
-    device = torch.device("cuda:0" if torch.cuda.is_available() and gpu == 'gpu' else "cpu")
-    model.to(device)
-    since = time.time()
-
-    best_model_wts = copy.deepcopy(model.state_dict())
-    best_acc = 0.0
-    steps = 0
-
-    print('Start train model')
-    for epoch in range(num_epochs):
-        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
-        print('-' * 10)
-
-        for phase in ['train', 'valid']:
-            if phase == 'train':
-                steps += 1
-                model.train()  
-            else:
-                print('Start validation')
-                model.eval()  
-            
-            # init counters
-            running_loss = 0.0
-            running_corrects = 0
-
-            for inputs, labels in dataloaders[phase]:
-                inputs = inputs.to(device)
-                labels = labels.to(device)
-
-                optimizer.zero_grad()
-
-                with torch.set_grad_enabled(phase == 'train'):
-                    outputs = model(inputs)
-                    _, preds = torch.max(outputs, 1)
-                    loss = criterion(outputs, labels)
-
-                    if phase == 'train':
-                        loss.backward()
-                        optimizer.step()
-
-                running_loss += loss.item() * inputs.size(0)
-                running_corrects += torch.sum(preds == labels.data)
-
-            epoch_loss = running_loss / dataset_sizes[phase]
-            epoch_acc = running_corrects.double() / dataset_sizes[phase]
-
-            print('{} Loss: {:.4f} Accuracy: {:.4f}'.format(
-                phase, epoch_loss, epoch_acc))
-
-            if phase == 'valid' and epoch_acc > best_acc:
-                best_acc = epoch_acc
-       #         best_model_wts = copy.deepcopy(model.state_dict())
-
-        print()
-
-    time_elapsed = time.time() - since
-    print('Training complete in {:.0f}m {:.0f}s'.format(
-        time_elapsed // 60, time_elapsed % 60))
-    print('Best validation Accuracy: {:4f}'.format(best_acc))
-
-    model.load_state_dict(best_model_wts)
-    return model
-
-def save_model(model, train_data, optimizer, save_dir, epochs):
+def save_model(model, train_data, optimizer, save_dir, arch, epochs):
     model.class_to_idx = train_data.class_to_idx
    # model.class_to_idx = trainloader.class_to_idx
     model.cpu()  
-    checkpoint = {'arch': 'vgg19',
+    checkpoint = {'arch': arch,
                   'state_dict': model.state_dict(),
                   'classifier': model.classifier,
                   'class_to_idx': train_data.class_to_idx,
@@ -230,14 +159,18 @@ def save_model(model, train_data, optimizer, save_dir, epochs):
     torch.save(checkpoint, save_dir)
     return
 
-def load_checkpoint():
-    model = models.vgg19(pretrained=True)
+def load_checkpoint(arch):
+    if arch.lower() == "vgg19":
+       model = models.vgg19(pretrained=True)
+    else:
+       model = models.vgg16(pretrained=True)
+    
     classifier = nn.Sequential(OrderedDict([
                             ('dropout1', nn.Dropout(0.1)),
-                            ('fc1', nn.Linear(25088,4096)), # 25088 must match
+                            ('fc1', nn.Linear(25088,1024)), # 25088 must match
                             ('relu1', nn.ReLU()),
                             ('dropout2', nn.Dropout(0.1)),
-                            ('fc2', nn.Linear(4096, 102)),
+                            ('fc2', nn.Linear(1024, 102)),
                             ('output', nn.LogSoftmax(dim=1))
                             ]))
     model.classifier = classifier
@@ -248,10 +181,9 @@ def load_checkpoint():
     print('model loaded')
     return model
 
-def predict(image_path, model, topk=5):
-    ''' Predict the class (or classes) of an image using a trained deep learning model.
-    '''
-    device = torch.device("cuda:0")
+def predict(image_path, model, topk, gpu):
+    device = torch.device("cuda:0" if torch.cuda.is_available() and gpu == 'gpu' else "cpu")   
+    # device = torch.device("cuda:0")
     model.eval()
     model.to(device)
    
@@ -264,12 +196,12 @@ def predict(image_path, model, topk=5):
     with torch.no_grad():
         output = model.forward(img_add_dim)
 
-    # Calculate
+   
     probs = torch.exp(output)
     probs_top = probs.topk(topk)[0]
     index_top = probs.topk(topk)[1]
     
-    # Convert to lists
+   
     probs_top_list = np.array(probs_top)[0]
     index_top_list = np.array(index_top[0])
     
