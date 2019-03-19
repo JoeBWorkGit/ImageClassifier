@@ -90,7 +90,8 @@ def train_model(model, epochs,trainloader, validloader, criterion, optimizer,gpu
         for ii, (inputs, labels) in enumerate(trainloader):
             steps += 1
             
-            inputs, labels = inputs.to('cuda'), labels.to('cuda')
+            if gpu == 'gpu':
+                inputs, labels = inputs.to('cuda'), labels.to('cuda')
            
             optimizer.zero_grad()
 
